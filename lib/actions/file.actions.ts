@@ -1,12 +1,10 @@
 "use server";
-import { createAdminClient } from "../appwrite";
+import { createAdminClient, createSessionClient } from "../appwrite";
 import { InputFile } from "node-appwrite/file";
 import { ID, Models, Query } from "node-appwrite";
 import { appwriteConfig } from "../appwrite/config";
-import { constructFileUrl, getFileType } from "../utils";
+import { constructFileUrl, getFileType, parseStringify } from "../utils";
 import { revalidatePath } from "next/cache";
-import { parseStringify } from "../utils";
-import path from "path";
 import { getCurrentUser } from "./user.actions";
 
 const handleError = (error: unknown, message: string) => {
@@ -27,7 +25,7 @@ export const uploadFiles = async ({
     const bucketFile = await storage.createFile(
       appwriteConfig.bucketId,
       ID.unique(),
-      inputFile
+      inputFile,
     );
 
     const fileDocument = {
@@ -47,7 +45,7 @@ export const uploadFiles = async ({
         appwriteConfig.databaseId,
         appwriteConfig.filesCollectionId,
         ID.unique(),
-        fileDocument
+        fileDocument,
       )
       .catch(async (error: unknown) => {
         await storage.deleteFile(appwriteConfig.bucketId, bucketFile.$id);
@@ -66,7 +64,7 @@ const createQueries = (
   types: string[],
   searchText: string,
   sort: string,
-  limit?: number
+  limit?: number,
 ) => {
   const queries = [
     Query.or([
@@ -90,7 +88,7 @@ const createQueries = (
   const [sortBy, orderBy] = sort.split("-");
 
   queries.push(
-    orderBy === "asc" ? Query.orderAsc(sortBy) : Query.orderDesc(sortBy)
+    orderBy === "asc" ? Query.orderAsc(sortBy) : Query.orderDesc(sortBy),
   );
 
   return queries;
@@ -117,7 +115,7 @@ export const getFiles = async ({
     const files = await databases.listDocuments(
       appwriteConfig.databaseId,
       appwriteConfig.filesCollectionId,
-      queries
+      queries,
     );
 
     console.log(files);
@@ -142,7 +140,7 @@ export const renameFile = async ({
       appwriteConfig.databaseId,
       appwriteConfig.filesCollectionId,
       fileId,
-      { name: newName }
+      { name: newName },
     );
 
     revalidatePath(path);
@@ -164,7 +162,7 @@ export const updateFileUsers = async ({
       appwriteConfig.databaseId,
       appwriteConfig.filesCollectionId,
       fileId,
-      { users: emails }
+      { users: emails },
     );
 
     revalidatePath(path);
@@ -185,7 +183,7 @@ export const deleteFile = async ({
     const deletedFile = await databases.deleteDocument(
       appwriteConfig.databaseId,
       appwriteConfig.filesCollectionId,
-      fileId
+      fileId,
     );
 
     if (deletedFile) {
@@ -198,3 +196,69 @@ export const deleteFile = async ({
     handleError(error, "Failed to delete file");
   }
 };
+
+let spaceUsageCache: {
+  data: any;
+  timestamp: number;
+} | null = null;
+
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+export async function getTotalSpaceUsed() {
+  try {
+    // Check cache
+    if (
+      spaceUsageCache &&
+      Date.now() - spaceUsageCache.timestamp < CACHE_DURATION
+    ) {
+      return spaceUsageCache.data;
+    }
+
+    const { databases } = await createSessionClient();
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
+      throw new Error("User is not authenticated");
+    }
+
+    const files = await databases.listDocuments(
+      appwriteConfig.databaseId,
+      appwriteConfig.filesCollectionId,
+      [Query.equal("owner", [currentUser.$id])],
+    );
+
+    const totalSpace = {
+      image: { size: 0, latestDate: "" },
+      document: { size: 0, latestDate: "" },
+      video: { size: 0, latestDate: "" },
+      audio: { size: 0, latestDate: "" },
+      other: { size: 0, latestDate: "" },
+      used: 0,
+      all: 2 * 1024 * 1024 * 1024,
+    };
+
+    files.documents.forEach((file) => {
+      const fileSize = file.size;
+      const fileType = file.type as FileType;
+      totalSpace[fileType].size += fileSize;
+      totalSpace.used += fileSize;
+      if (
+        !totalSpace[fileType].latestDate ||
+        new Date(file.$updatedAt) > new Date(totalSpace[fileType].latestDate)
+      ) {
+        totalSpace[fileType].latestDate = file.$updatedAt;
+      }
+    });
+
+    const result = parseStringify(totalSpace);
+
+    // Update cache
+    spaceUsageCache = {
+      data: result,
+      timestamp: Date.now(),
+    };
+
+    return result;
+  } catch (error) {
+    handleError(error, "Failed to get total space used");
+  }
+}

@@ -3,7 +3,7 @@ import Sort from "@/components/Sort";
 import { getFiles } from "@/lib/actions/file.actions";
 import Card from "@/components/Card";
 import { Models } from "node-appwrite";
-import { getFileTypesParams } from "@/lib/utils";
+import { convertFileSize, getFileTypesParams } from "@/lib/utils";
 
 const page = async ({ searchParams, params }: SearchParamProps) => {
   const type = ((await params)?.type as string) || "";
@@ -12,7 +12,15 @@ const page = async ({ searchParams, params }: SearchParamProps) => {
 
   const types = getFileTypesParams(type) as FileType[];
 
-  const files = await getFiles({ types: types, searchText, sort });
+  const files = await getFiles({ types, searchText, sort });
+
+  // Calculate total size
+  const totalSize = files.documents.reduce(
+    (acc: number, file: Models.Document) => {
+      return acc + file.size;
+    },
+    0,
+  );
 
   return (
     <div className="page-container">
@@ -20,11 +28,11 @@ const page = async ({ searchParams, params }: SearchParamProps) => {
         <h1 className="h1 capitalize">{type}</h1>
         <div className="total-size-section">
           <p className="body-1">
-            Total: <span className="h5">0 MB</span>
+            Total: <span className="h5">{convertFileSize(totalSize)}</span>
           </p>
 
           <div className="sort-container">
-            <p className="body-1 hidden sm:block text-light-200">Sort by:</p>
+            <p className="body-1 hidden text-light-200 sm:block">Sort by:</p>
             <Sort />
           </div>
         </div>

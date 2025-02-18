@@ -85,3 +85,6 @@ export const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
 export const avatarPlaceholderUrl =
   "https://img.freepik.com/free-psd/3d-render-avatar-character_23-2150611765.jpg";
+
+export const MAX_RETRIES = 3;
+export const RETRY_DELAY = 1000; // 1 second
