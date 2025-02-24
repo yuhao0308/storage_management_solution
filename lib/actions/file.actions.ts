@@ -1,18 +1,19 @@
 "use server";
-import { createAdminClient, createSessionClient } from "../appwrite";
+
+import { createAdminClient, createSessionClient } from "@/lib/appwrite";
 import { InputFile } from "node-appwrite/file";
+import { appwriteConfig } from "@/lib/appwrite/config";
 import { ID, Models, Query } from "node-appwrite";
-import { appwriteConfig } from "../appwrite/config";
-import { constructFileUrl, getFileType, parseStringify } from "../utils";
+import { constructFileUrl, getFileType, parseStringify } from "@/lib/utils";
 import { revalidatePath } from "next/cache";
-import { getCurrentUser } from "./user.actions";
+import { getCurrentUser } from "@/lib/actions/user.actions";
 
 const handleError = (error: unknown, message: string) => {
   console.log(error, message);
   throw error;
 };
 
-export const uploadFiles = async ({
+export const uploadFile = async ({
   file,
   ownerId,
   accountId,
@@ -22,6 +23,7 @@ export const uploadFiles = async ({
 
   try {
     const inputFile = InputFile.fromBuffer(file, file.name);
+
     const bucketFile = await storage.createFile(
       appwriteConfig.bucketId,
       ID.unique(),
@@ -49,13 +51,13 @@ export const uploadFiles = async ({
       )
       .catch(async (error: unknown) => {
         await storage.deleteFile(appwriteConfig.bucketId, bucketFile.$id);
-        handleError(error, "Failed to upload files");
+        handleError(error, "Failed to create file document");
       });
 
     revalidatePath(path);
     return parseStringify(newFile);
   } catch (error) {
-    handleError(error, "Failed to upload files");
+    handleError(error, "Failed to upload file");
   }
 };
 
@@ -73,23 +75,17 @@ const createQueries = (
     ]),
   ];
 
-  if (types.length > 0) {
-    queries.push(Query.equal("type", types));
+  if (types.length > 0) queries.push(Query.equal("type", types));
+  if (searchText) queries.push(Query.contains("name", searchText));
+  if (limit) queries.push(Query.limit(limit));
+
+  if (sort) {
+    const [sortBy, orderBy] = sort.split("-");
+
+    queries.push(
+      orderBy === "asc" ? Query.orderAsc(sortBy) : Query.orderDesc(sortBy),
+    );
   }
-
-  if (searchText) {
-    queries.push(Query.contains("name", searchText));
-  }
-
-  if (limit) {
-    queries.push(Query.limit(limit));
-  }
-
-  const [sortBy, orderBy] = sort.split("-");
-
-  queries.push(
-    orderBy === "asc" ? Query.orderAsc(sortBy) : Query.orderDesc(sortBy),
-  );
 
   return queries;
 };
@@ -104,13 +100,10 @@ export const getFiles = async ({
 
   try {
     const currentUser = await getCurrentUser();
-    if (!currentUser) {
-      throw new Error("User not found");
-    }
+
+    if (!currentUser) throw new Error("User not found");
 
     const queries = createQueries(currentUser, types, searchText, sort, limit);
-
-    console.log(currentUser, queries);
 
     const files = await databases.listDocuments(
       appwriteConfig.databaseId,
@@ -118,8 +111,7 @@ export const getFiles = async ({
       queries,
     );
 
-    console.log(files);
-
+    console.log({ files });
     return parseStringify(files);
   } catch (error) {
     handleError(error, "Failed to get files");
@@ -140,7 +132,9 @@ export const renameFile = async ({
       appwriteConfig.databaseId,
       appwriteConfig.filesCollectionId,
       fileId,
-      { name: newName },
+      {
+        name: newName,
+      },
     );
 
     revalidatePath(path);
@@ -162,13 +156,15 @@ export const updateFileUsers = async ({
       appwriteConfig.databaseId,
       appwriteConfig.filesCollectionId,
       fileId,
-      { users: emails },
+      {
+        users: emails,
+      },
     );
 
     revalidatePath(path);
     return parseStringify(updatedFile);
   } catch (error) {
-    handleError(error, "Failed to update file users");
+    handleError(error, "Failed to rename file");
   }
 };
 
@@ -193,32 +189,16 @@ export const deleteFile = async ({
     revalidatePath(path);
     return parseStringify({ status: "success" });
   } catch (error) {
-    handleError(error, "Failed to delete file");
+    handleError(error, "Failed to rename file");
   }
 };
 
-let spaceUsageCache: {
-  data: any;
-  timestamp: number;
-} | null = null;
-
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
-
+// ============================== TOTAL FILE SPACE USED
 export async function getTotalSpaceUsed() {
   try {
-    // Check cache
-    if (
-      spaceUsageCache &&
-      Date.now() - spaceUsageCache.timestamp < CACHE_DURATION
-    ) {
-      return spaceUsageCache.data;
-    }
-
     const { databases } = await createSessionClient();
     const currentUser = await getCurrentUser();
-    if (!currentUser) {
-      throw new Error("User is not authenticated");
-    }
+    if (!currentUser) throw new Error("User is not authenticated.");
 
     const files = await databases.listDocuments(
       appwriteConfig.databaseId,
@@ -233,14 +213,14 @@ export async function getTotalSpaceUsed() {
       audio: { size: 0, latestDate: "" },
       other: { size: 0, latestDate: "" },
       used: 0,
-      all: 2 * 1024 * 1024 * 1024,
+      all: 2 * 1024 * 1024 * 1024 /* 2GB available bucket storage */,
     };
 
     files.documents.forEach((file) => {
-      const fileSize = file.size;
       const fileType = file.type as FileType;
-      totalSpace[fileType].size += fileSize;
-      totalSpace.used += fileSize;
+      totalSpace[fileType].size += file.size;
+      totalSpace.used += file.size;
+
       if (
         !totalSpace[fileType].latestDate ||
         new Date(file.$updatedAt) > new Date(totalSpace[fileType].latestDate)
@@ -249,16 +229,8 @@ export async function getTotalSpaceUsed() {
       }
     });
 
-    const result = parseStringify(totalSpace);
-
-    // Update cache
-    spaceUsageCache = {
-      data: result,
-      timestamp: Date.now(),
-    };
-
-    return result;
+    return parseStringify(totalSpace);
   } catch (error) {
-    handleError(error, "Failed to get total space used");
+    handleError(error, "Error calculating total space used:, ");
   }
 }
