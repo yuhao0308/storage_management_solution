@@ -1,7 +1,5 @@
 # StoreIt - Cloud Storage Management Solution
 
-![StoreIt Logo](public/assets/icons/logo-full.svg)
-
 ## Overview
 
 StoreIt is a modern cloud storage solution that provides seamless file access and management from anywhere. Organize, upload, and share your files securely through an intuitive web interface.
